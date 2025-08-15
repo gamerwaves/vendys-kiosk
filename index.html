@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vending Kiosk Simulation</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #f5f5f5; color: #222; text-align: center; }
+  .lcd {
+    background: #003300;
+    color: #33ff33;
+    font-family: monospace;
+    font-size: 20px;
+    width: 320px;
+    height: 70px;
+    padding: 10px;
+    border-radius: 6px;
+    box-shadow: inset 0 0 10px #000;
+    margin: 20px auto;
+    white-space: pre;
+  }
+  button {
+    font-size: 16px;
+    padding: 8px 14px;
+    margin: 3px;
+    border: none;
+    border-radius: 6px;
+    background: #444;
+    color: white;
+    cursor: pointer;
+  }
+  button:hover { background: #666; }
+  .side-buttons, .keypad, .products { margin-top: 10px; }
+  .keypad button { width: 50px; height: 50px; font-size: 18px; }
+  .products button { 
+    background: #2a5c2a; 
+    margin: 5px; 
+    padding: 10px 15px; 
+    font-size: 14px;
+  }
+  .products button:hover { background: #4a7c4a; }
+</style>
+</head>
+<body>
+
+<h1>Vending Machine LCD Simulation</h1>
+<div class="lcd" id="lcd"></div>
+
+<!-- Fake NFC Cards -->
+<div>
+  <h3>Fake NFC Cards</h3>
+  <button onclick="tapCard('alice')">Tap Alice's Card</button>
+  <button onclick="tapCard('bob')">Tap Bob's Card</button>
+  <button onclick="tapCard('admin')">Tap Admin Card</button>
+</div>
+
+<!-- Products -->
+<div class="products">
+  <h3>Products</h3>
+  <button onclick="selectProduct('Coke', 15)">A1 - Coke (15pts)</button>
+  <button onclick="selectProduct('Chips', 12)">A2 - Chips (12pts)</button>
+  <button onclick="selectProduct('Candy', 8)">A3 - Candy (8pts)</button>
+  <button onclick="selectProduct('Water', 10)">B1 - Water (10pts)</button>
+  <button onclick="selectProduct('Cookie', 6)">B2 - Cookie (6pts)</button>
+  <button onclick="selectProduct('Juice', 18)">B3 - Juice (18pts)</button>
+  <button onclick="selectProduct('Isaac\'s Head', 9999999999999)">B4 - Isaac's Head (9999999999999pts)</button>
+</div>
+
+<!-- Side Buttons for scrolling -->
+<div class="side-buttons">
+  <h3>Side Scroll</h3>
+  <button onclick="scrollUp()">↑ Scroll Up</button>
+  <button onclick="scrollDown()">↓ Scroll Down</button>
+</div>
+
+<!-- Keypad -->
+<div class="keypad">
+  <h3>Keypad</h3>
+  <div>
+    <button onclick="keyPress('1')">1</button>
+    <button onclick="keyPress('2')">2</button>
+    <button onclick="keyPress('3')">3</button>
+    <button onclick="keyPress('A')">A</button>
+  </div>
+  <div>
+    <button onclick="keyPress('4')">4</button>
+    <button onclick="keyPress('5')">5</button>
+    <button onclick="keyPress('6')">6</button>
+    <button onclick="keyPress('B')">B</button>
+  </div>
+  <div>
+    <button onclick="keyPress('7')">7</button>
+    <button onclick="keyPress('8')">8</button>
+    <button onclick="keyPress('9')">9</button>
+    <button onclick="keyPress('C')">C</button>
+  </div>
+  <div>
+    <button onclick="keyPress('*')">*</button>
+    <button onclick="keyPress('0')">0</button>
+    <button onclick="keyPress('#')">#</button>
+    <button onclick="keyPress('D')">D</button>
+  </div>
+</div>
+
+<!-- Main Controls -->
+<div>
+  <h3>Main Controls</h3>
+  <button onclick="pressSettings()">Settings</button>
+  <button onclick="showIdle()">Back to Idle</button>
+</div>
+
+<script>
+let lcd = document.getElementById("lcd");
+let currentUser = null;
+let inAdminMode = false;
+let settingsPending = false;
+let adminPage = null;
+let adminList = [];
+let scrollIndex = 0;
+let editMode = false;
+let editTargetUser = null;
+let keypadBuffer = "";
+let addPointsMode = false;
+let productSelectionMode = false;
+let registerMode = false;
+let registerStep = 0; // 0 = enter name, 1 = enter initial points
+
+let transactionLog = [];
+let db = {
+  alice: { name: "Alice", points: 120 },
+  bob: { name: "Bob", points: 25 },
+  admin: { name: "Admin", points: Infinity }
+};
+
+let products = {
+  'A1': { name: 'Coke', cost: 15 },
+  'A2': { name: 'Chips', cost: 12 },
+  'A3': { name: 'Candy', cost: 8 },
+  'B1': { name: 'Water', cost: 10 },
+  'B2': { name: 'Cookie', cost: 6 },
+  'B3': { name: 'Juice', cost: 18 },
+  'B4': { name: 'Isaac\'s Head', cost: 9999999999999 }
+};
+
+function showLCD(line1, line2) {
+  line1 = line1.padEnd(16, " ");
+  line2 = line2.padEnd(16, " ");
+  lcd.textContent = line1 + "\n" + line2;
+}
+
+function getTimeStamp() {
+  return new Date().toLocaleTimeString('en-US');
+}
+
+function logTransaction(user, action) {
+  transactionLog.push(`${getTimeStamp()} - ${user}: ${action}`);
+}
+
+function showIdle() {
+  currentUser = null;
+  inAdminMode = false;
+  settingsPending = false;
+  adminPage = null;
+  editMode = false;
+  addPointsMode = false;
+  productSelectionMode = false;
+  registerMode = false;
+  registerStep = 0;
+  keypadBuffer = "";
+  showLCD("Tap your card", "Select product:");
+}
+
+function tapCard(id) {
+  if (!db[id]) { 
+    showLCD("Card Unknown", ""); 
+    setTimeout(showIdle, 2000);
+    return; 
+  }
+  currentUser = id;
+  if (settingsPending && id === "admin") {
+    inAdminMode = true;
+    settingsPending = false;
+    adminMenu();
+  } else if (id === "admin") {
+    showLCD("Hello Admin", "Points: ∞");
+    productSelectionMode = true;
+  } else {
+    showLCD("Hello " + db[id].name, "Points: " + db[id].points);
+    productSelectionMode = true;
+  }
+}
+
+function selectProduct(name, cost) {
+  if (!currentUser) { 
+    showLCD("Please tap card", "first!"); 
+    setTimeout(showIdle, 2000);
+    return; 
+  }
+  
+  if (currentUser === "admin" && !inAdminMode) {
+    showLCD("Dispensing " + name, "Thank you Admin!");
+    logTransaction("Admin", `Dispensed ${name} (∞ pts)`);
+    setTimeout(() => {
+      showLCD("Hello Admin", "Points: ∞");
+    }, 2000);
+    return;
+  }
+  
+  let user = db[currentUser];
+  if (user.points >= cost) {
+    user.points -= cost;
+    showLCD("Dispensing " + name, "Thank you!");
+    logTransaction(user.name, `Dispensed ${name} (-${cost} pts)`);
+    setTimeout(() => {
+      showIdle();
+      productSelectionMode = false;
+    }, 2000);
+  } else {
+    showLCD("Not enough pts!", "Need " + cost + " have " + user.points);
+    logTransaction(user.name, `Failed ${name} purchase`);
+    setTimeout(() => {
+      showIdle();
+      productSelectionMode = false;
+    }, 2000);
+  }
+}
+
+function selectProductByCode(code) {
+  if (code === "##") {
+    showIdle();
+    productSelectionMode = false;
+    return;
+  }
+  
+  if (!products[code]) {
+    showLCD("Invalid code!", "Try A1-A3,B1-B3");
+    setTimeout(() => {
+      if (currentUser) {
+        let user = db[currentUser];
+        if (currentUser === "admin") {
+          showLCD("Hello Admin", "Points: ∞");
+        } else {
+          showLCD("Hello " + user.name, "Points: " + user.points);
+        }
+        productSelectionMode = true;
+      } else {
+        showIdle();
+      }
+    }, 2000);
+    return;
+  }
+  
+  let product = products[code];
+  selectProduct(product.name, product.cost);
+}
+
+function pressSettings() {
+  settingsPending = true;
+  showLCD("Tap Admin Card", "to Continue");
+}
+
+function adminMenu() {
+  adminPage = "menu";
+  adminList = ["1.View Users", "2.View Logs", "3.Edit Points", "4.Add Points", "5.Register User"];
+  scrollIndex = 0;
+  renderScrollList();
+}
+
+function renderScrollList() {
+  let l1 = adminList[scrollIndex] || "";
+  let l2 = adminList[scrollIndex+1] || "";
+  showLCD(l1, l2);
+}
+
+function scrollUp() {
+  if (!inAdminMode || editMode || addPointsMode || registerMode) return;
+  if (scrollIndex > 0) scrollIndex--;
+  renderScrollList();
+}
+
+function scrollDown() {
+  if (!inAdminMode || editMode || addPointsMode || registerMode) return;
+  if (scrollIndex < adminList.length - 2) scrollIndex++;
+  renderScrollList();
+}
+
+function keyPress(key) {
+  if (productSelectionMode && currentUser && !inAdminMode) {
+    // Handle product selection with keypad
+    keypadBuffer += key;
+    
+    // Check for valid product codes
+    if (keypadBuffer.length === 2) {
+      let code = keypadBuffer.toUpperCase();
+      productSelectionMode = false;
+      keypadBuffer = "";
+      selectProductByCode(code);
+      return;
+    } else if (keypadBuffer.length === 1) {
+      // Show what's been typed so far
+      let user = db[currentUser];
+      showLCD("Code: " + keypadBuffer, "Continue typing...");
+      return;
+    }
+  } else if (registerMode) {
+    handleRegisterMode(key);
+  } else if (inAdminMode && adminPage === "menu" && !editMode && !addPointsMode) {
+    if (key === '1') viewUsers();
+    if (key === '2') viewLogs();
+    if (key === '3') chooseUserForEdit();
+    if (key === '4') chooseUserForAddPoints();
+    if (key === '5') startRegisterUser();
+  } else if (editMode) {
+    handleEditMode(key);
+  } else if (addPointsMode) {
+    handleAddPointsMode(key);
+  } else if (adminPage === "editSelect" && key === 'A') {
+    selectUserForEdit();
+  } else if (adminPage === "addSelect" && key === 'A') {
+    selectUserForAddPoints();
+  }
+}
+
+function handleEditMode(key) {
+  if (key === '#') { // confirm
+    let val = parseInt(keypadBuffer);
+    if (!isNaN(val) && val >= 0) {
+      db[editTargetUser].points = val;
+      logTransaction("Admin", `Set ${db[editTargetUser].name} points to ${val}`);
+      showLCD("Points set to", val.toString());
+      setTimeout(() => {
+        editMode = false;
+        keypadBuffer = "";
+        adminMenu();
+      }, 2000);
+    } else {
+      showLCD("Invalid number!", "Try again");
+      keypadBuffer = "";
+      setTimeout(() => {
+        showLCD("Enter Points:", keypadBuffer);
+      }, 1500);
+    }
+  } else if (key === 'C') { // cancel
+    editMode = false;
+    keypadBuffer = "";
+    adminMenu();
+  } else if (key >= '0' && key <= '9') {
+    keypadBuffer += key;
+    showLCD("Enter Points:", keypadBuffer);
+  }
+}
+
+function handleAddPointsMode(key) {
+  if (key === '#') { // confirm
+    let val = parseInt(keypadBuffer);
+    if (!isNaN(val) && val > 0) {
+      db[editTargetUser].points += val;
+      logTransaction("Admin", `Added ${val} points to ${db[editTargetUser].name}`);
+      showLCD("Added " + val + " pts", "New total: " + db[editTargetUser].points);
+      setTimeout(() => {
+        addPointsMode = false;
+        keypadBuffer = "";
+        adminMenu();
+      }, 2000);
+    } else {
+      showLCD("Invalid number!", "Must be > 0");
+      keypadBuffer = "";
+      setTimeout(() => {
+        showLCD("Add Points:", keypadBuffer);
+      }, 1500);
+    }
+  } else if (key === 'C') { // cancel
+    addPointsMode = false;
+    keypadBuffer = "";
+    adminMenu();
+  } else if (key >= '0' && key <= '9') {
+    keypadBuffer += key;
+    showLCD("Add Points:", keypadBuffer);
+  }
+}
+
+function viewUsers() {
+  adminPage = "users";
+  adminList = Object.values(db).filter(u => u.name !== "Admin").map(u => `${u.name}: ${u.points}pts`);
+  scrollIndex = 0;
+  renderScrollList();
+}
+
+function viewLogs() {
+  adminPage = "logs";
+  adminList = transactionLog.slice().reverse();
+  if (adminList.length === 0) {
+    adminList = ["No transactions", "yet"];
+  }
+  scrollIndex = 0;
+  renderScrollList();
+}
+
+function chooseUserForEdit() {
+  adminPage = "editSelect";
+  adminList = [];
+  Object.keys(db).forEach(id => {
+    if (id !== "admin") {
+      adminList.push(`${db[id].name} (A)`);
+    }
+  });
+  if (adminList.length === 0) {
+    adminList = ["No users found", ""];
+  }
+  scrollIndex = 0;
+  renderScrollList();
+}
+
+function chooseUserForAddPoints() {
+  adminPage = "addSelect";
+  adminList = [];
+  Object.keys(db).forEach(id => {
+    if (id !== "admin") {
+      adminList.push(`${db[id].name} (A)`);
+    }
+  });
+  if (adminList.length === 0) {
+    adminList = ["No users found", ""];
+  }
+  scrollIndex = 0;
+  renderScrollList();
+}
+
+function selectUserForEdit() {
+  if (adminList.length === 0 || adminList[0] === "No users found") return;
+  
+  let userKeys = Object.keys(db).filter(id => id !== "admin");
+  editTargetUser = userKeys[scrollIndex];
+  editMode = true;
+  keypadBuffer = "";
+  showLCD("Enter Points:", "# confirm C cancel");
+}
+
+function selectUserForAddPoints() {
+  if (adminList.length === 0 || adminList[0] === "No users found") return;
+  
+  let userKeys = Object.keys(db).filter(id => id !== "admin");
+  editTargetUser = userKeys[scrollIndex];
+  addPointsMode = true;
+  keypadBuffer = "";
+  showLCD("Add Points:", "# confirm C cancel");
+}
+
+function startRegisterUser() {
+  registerMode = true;
+  registerStep = 0;
+  keypadBuffer = "";
+  showLCD("Enter user ID:", "# confirm C cancel");
+}
+
+function handleRegisterMode(key) {
+  if (key === '#') { // confirm
+    if (registerStep === 0) {
+      // Confirming user ID
+      if (keypadBuffer.length === 0) {
+        showLCD("ID cannot be", "empty!");
+        setTimeout(() => {
+          showLCD("Enter user ID:", "# confirm C cancel");
+        }, 1500);
+        return;
+      }
+      if (db[keypadBuffer.toLowerCase()]) {
+        showLCD("User already", "exists!");
+        setTimeout(() => {
+          showLCD("Enter user ID:", "# confirm C cancel");
+        }, 1500);
+        keypadBuffer = "";
+        return;
+      }
+      editTargetUser = keypadBuffer.toLowerCase();
+      registerStep = 1;
+      keypadBuffer = "";
+      showLCD("Enter name:", "# confirm C cancel");
+    } else if (registerStep === 1) {
+      // Confirming name
+      if (keypadBuffer.length === 0) {
+        showLCD("Name cannot be", "empty!");
+        setTimeout(() => {
+          showLCD("Enter name:", "# confirm C cancel");
+        }, 1500);
+        return;
+      }
+      let userName = keypadBuffer;
+      registerStep = 2;
+      keypadBuffer = "";
+      showLCD("Enter points:", "# confirm C cancel");
+      // Store the name temporarily
+      editTargetUser = { id: editTargetUser, name: userName };
+    } else if (registerStep === 2) {
+      // Confirming initial points
+      let val = parseInt(keypadBuffer);
+      if (isNaN(val) || val < 0) {
+        showLCD("Invalid number!", "Must be >= 0");
+        keypadBuffer = "";
+        setTimeout(() => {
+          showLCD("Enter points:", "# confirm C cancel");
+        }, 1500);
+        return;
+      }
+      
+      // Create the new user
+      db[editTargetUser.id] = { name: editTargetUser.name, points: val };
+      logTransaction("Admin", `Registered ${editTargetUser.name} with ${val} points`);
+      showLCD("User registered!", editTargetUser.name + " added");
+      
+      setTimeout(() => {
+        registerMode = false;
+        registerStep = 0;
+        keypadBuffer = "";
+        adminMenu();
+      }, 2000);
+    }
+  } else if (key === 'C') { // cancel
+    registerMode = false;
+    registerStep = 0;
+    keypadBuffer = "";
+    adminMenu();
+  } else if ((key >= '0' && key <= '9') || (key >= 'A' && key <= 'Z') || (key >= 'a' && key <= 'z')) {
+    keypadBuffer += key;
+    if (registerStep === 0) {
+      showLCD("ID: " + keypadBuffer, "# confirm C cancel");
+    } else if (registerStep === 1) {
+      showLCD("Name: " + keypadBuffer, "# confirm C cancel");
+    } else if (registerStep === 2) {
+      showLCD("Points: " + keypadBuffer, "# confirm C cancel");
+    }
+  }
+}
+
+// Initialize
+showIdle();
+</script>
+
+</body>
+</html>
